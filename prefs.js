@@ -96,14 +96,6 @@ export default class ObisionExtensionDeskPreferences extends ExtensionPreference
         gridGroup.add(gridRowsRow);
         settings.bind('grid-rows', gridRowsRow, 'value', Gio.SettingsBindFlags.DEFAULT);
 
-        // Use Grid
-        const useGridRow = new Adw.SwitchRow({
-            title: 'Use Grid',
-            subtitle: 'Snap icons to a grid layout',
-        });
-        gridGroup.add(useGridRow);
-        settings.bind('use-grid', useGridRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-
         // Grid Visible
         const gridVisibleRow = new Adw.SwitchRow({
             title: 'Show Grid',

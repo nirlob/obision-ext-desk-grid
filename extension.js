@@ -1132,95 +1132,119 @@ const DesktopGrid = GObject.registerClass(
 
             this._extension = extension;
             this._icons = [];
-            this._contextMenu = null;
+            this._desktopMenu = null;
 
             // Click on empty area
             this.connect('button-press-event', (actor, event) => {
                 const button = event.get_button();
+
                 if (button === 1) {
                     // Left click - deselect all
-                    this._closeContextMenu();
                     this._extension._deselectAll();
-                } else if (button === 3) {
-                    // Right click - show desktop context menu
-                    this._showDesktopContextMenu(event);
                     return Clutter.EVENT_STOP;
                 }
+                // TODO: Right-click context menu disabled for now - needs fixing
                 return Clutter.EVENT_PROPAGATE;
             });
         }
 
-        _showDesktopContextMenu(event) {
-            this._closeContextMenu();
+        _showDesktopMenu(x, y) {
+            this._closeDesktopMenu();
 
-            const [mouseX, mouseY] = event.get_coords();
-
-            // Create a simple popup menu using BoxLayout
-            this._contextMenu = new St.BoxLayout({
+            // Create menu
+            this._desktopMenu = new St.BoxLayout({
                 style_class: 'popup-menu-content',
                 vertical: true,
-                style: 'padding: 8px 0;',
+                reactive: true,
+                style: 'padding: 6px 0; min-width: 200px;',
             });
 
-            // Add menu item
-            const prefsItem = new St.Button({
+            // Preferences item
+            const prefsBtn = new St.Button({
                 style_class: 'popup-menu-item',
-                label: 'Preferencias de escritorio',
-                x_align: Clutter.ActorAlign.START,
-                style: 'padding: 8px 16px;',
+                reactive: true,
+                can_focus: true,
+                x_expand: true,
             });
-            prefsItem.connect('clicked', () => {
-                this._closeContextMenu();
-                this._extension.openPreferences();
-            });
-            this._contextMenu.add_child(prefsItem);
-
-            // Position menu at mouse, but keep within screen bounds
-            const monitor = Main.layoutManager.primaryMonitor;
-            let menuX = mouseX;
-            let menuY = mouseY;
-
-            // We'll adjust after adding to get actual size
-            Main.layoutManager.addChrome(this._contextMenu);
-
-            // Adjust position to stay on screen
-            const menuWidth = this._contextMenu.width || 200;
-            const menuHeight = this._contextMenu.height || 40;
-
-            if (menuX + menuWidth > monitor.x + monitor.width) {
-                menuX = monitor.x + monitor.width - menuWidth - 10;
-            }
-            if (menuY + menuHeight > monitor.y + monitor.height) {
-                menuY = monitor.y + monitor.height - menuHeight - 10;
-            }
-
-            this._contextMenu.set_position(menuX, menuY);
-
-            // Close menu when clicking elsewhere
-            this._contextMenuGrabId = global.stage.connect('button-press-event', (actor, ev) => {
-                const [clickX, clickY] = ev.get_coords();
-                const [menuAbsX, menuAbsY] = this._contextMenu.get_transformed_position();
-                const menuW = this._contextMenu.width;
-                const menuH = this._contextMenu.height;
-
-                // Check if click is outside menu
-                if (clickX < menuAbsX || clickX > menuAbsX + menuW ||
-                    clickY < menuAbsY || clickY > menuAbsY + menuH) {
-                    this._closeContextMenu();
+            prefsBtn.set_child(new St.Label({
+                text: 'Preferencias de escritorio',
+                x_expand: true,
+                style: 'padding: 6px 12px;',
+            }));
+            prefsBtn.connect('clicked', () => {
+                this._closeDesktopMenu();
+                try {
+                    Gio.Subprocess.new(
+                        ['gnome-extensions', 'prefs', 'obision-extension-desk@obision.com'],
+                        Gio.SubprocessFlags.NONE
+                    );
+                } catch (e) {
+                    log(`[Obision] Error opening prefs: ${e}`);
                 }
-                return Clutter.EVENT_PROPAGATE;
+            });
+            this._desktopMenu.add_child(prefsBtn);
+
+            // Add to stage
+            global.stage.add_child(this._desktopMenu);
+
+            // Position with bounds checking
+            const monitor = Main.layoutManager.primaryMonitor;
+            let menuX = x;
+            let menuY = y;
+
+            // Set initial position
+            this._desktopMenu.set_position(menuX, menuY);
+
+            // Adjust bounds after layout
+            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                if (!this._desktopMenu) return GLib.SOURCE_REMOVE;
+                const w = this._desktopMenu.width;
+                const h = this._desktopMenu.height;
+                if (menuX + w > monitor.x + monitor.width) menuX = monitor.x + monitor.width - w - 8;
+                if (menuY + h > monitor.y + monitor.height) menuY = monitor.y + monitor.height - h - 8;
+                this._desktopMenu.set_position(menuX, menuY);
+                return GLib.SOURCE_REMOVE;
+            });
+
+            // Listen for clicks - use simple bounding box check
+            this._stageClickId = global.stage.connect('event', (actor, ev) => {
+                if (ev.type() !== Clutter.EventType.BUTTON_PRESS) {
+                    return Clutter.EVENT_PROPAGATE;
+                }
+
+                if (!this._desktopMenu) {
+                    return Clutter.EVENT_PROPAGATE;
+                }
+
+                // Get click position
+                const [clickX, clickY] = ev.get_coords();
+
+                // Get menu's actual position and size directly from actor properties
+                const mx = this._desktopMenu.x;
+                const my = this._desktopMenu.y;
+                const mw = this._desktopMenu.width;
+                const mh = this._desktopMenu.height;
+
+                // Check if click is inside menu bounding box
+                if (clickX >= mx && clickX <= mx + mw && clickY >= my && clickY <= my + mh) {
+                    return Clutter.EVENT_PROPAGATE; // Inside menu, let it handle
+                }
+
+                // Click outside - close menu
+                this._closeDesktopMenu();
+                return Clutter.EVENT_STOP;
             });
         }
 
-        _closeContextMenu() {
-            if (this._contextMenuGrabId) {
-                global.stage.disconnect(this._contextMenuGrabId);
-                this._contextMenuGrabId = null;
+        _closeDesktopMenu() {
+            if (this._stageClickId) {
+                global.stage.disconnect(this._stageClickId);
+                this._stageClickId = null;
             }
-            if (this._contextMenu) {
-                Main.layoutManager.removeChrome(this._contextMenu);
-                this._contextMenu.destroy();
-                this._contextMenu = null;
+            if (this._desktopMenu) {
+                global.stage.remove_child(this._desktopMenu);
+                this._desktopMenu.destroy();
+                this._desktopMenu = null;
             }
         }
 
@@ -2304,8 +2328,13 @@ export default class ObisionExtensionDesk extends Extension {
      */
     _reloadIcons() {
         // Save current icon positions before clearing
+        const cellWidth = this._getCellWidth();
+        const cellHeight = this._getCellHeight();
         for (const icon of this._grid.getIcons()) {
-            this._saveIconPosition(icon._fileName, icon.x, icon.y);
+            // Convert pixel position to col/row
+            const col = Math.round(icon.x / cellWidth);
+            const row = Math.round(icon.y / cellHeight);
+            this._saveIconPosition(icon._fileName, col, row);
         }
 
         // Clear icons and cell grid
