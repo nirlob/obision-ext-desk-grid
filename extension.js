@@ -12,6 +12,7 @@ import Gio from 'gi://Gio';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import Cairo from 'gi://cairo';
+import Pango from 'gi://Pango';
 
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -72,13 +73,10 @@ const DesktopIcon = GObject.registerClass(
             const iconSize = Math.max(MIN_ICON_SIZE, Math.min(availableWidth, availableHeight));
 
             super._init({
-                vertical: true,
                 reactive: true,
                 can_focus: true,
                 track_hover: true,
                 style_class: 'desktop-icon',
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
                 // Fix widget size to cell dimensions
                 width: widgetWidth,
                 height: widgetHeight,
@@ -95,12 +93,22 @@ const DesktopIcon = GObject.registerClass(
             this._applyElevationStyle();
             this._applyBackgroundStyle();
 
+            // Inner container to group icon+label and center them together
+            this._innerBox = new St.BoxLayout({
+                vertical: true,
+                x_expand: true,
+                y_expand: true,
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            this.add_child(this._innerBox);
+
             // Icon container
             this._iconContainer = new St.Bin({
                 style_class: 'desktop-icon-container',
                 x_align: Clutter.ActorAlign.CENTER,
             });
-            this.add_child(this._iconContainer);
+            this._innerBox.add_child(this._iconContainer);
 
             // Create icon from file info
             this._createIcon();
@@ -112,14 +120,20 @@ const DesktopIcon = GObject.registerClass(
             const baseFontSize = 10;
             const fontSize = Math.round(baseFontSize + (fontSizeRatio - 1) * 2); // Scale gently
 
-            // Label
+            // Label - St.Label handles wrapping automatically with width constraint
             this._label = new St.Label({
                 text: this._getDisplayName(),
                 style_class: 'desktop-icon-label',
                 style: `font-size: ${fontSize}px;`,
                 x_align: Clutter.ActorAlign.CENTER,
+                width: widgetWidth - 8,
             });
-            this.add_child(this._label);
+            this._label.clutter_text.set_line_wrap(true);
+            this._label.clutter_text.set_ellipsize(Pango.EllipsizeMode.END);
+            // Limit to 2 lines max
+            this._label.clutter_text.set_max_length(0); // no char limit
+            this._label.set_style(`font-size: ${fontSize}px; max-height: ${fontSize * 2.4}px;`);
+            this._innerBox.add_child(this._label);
 
             // Setup event handlers
             this._setupEvents();
@@ -167,7 +181,28 @@ const DesktopIcon = GObject.registerClass(
 
         _createIcon() {
             try {
-                const gicon = this._fileInfo.get_icon();
+                let gicon = null;
+
+                // Try to get icon from content type (better for documents)
+                const contentType = this._fileInfo.get_content_type();
+                if (contentType) {
+                    // First try to get the app's icon for this content type
+                    const appInfo = Gio.AppInfo.get_default_for_type(contentType, false);
+                    if (appInfo) {
+                        gicon = appInfo.get_icon();
+                    }
+
+                    // If no app icon, use the content type icon
+                    if (!gicon) {
+                        gicon = Gio.content_type_get_icon(contentType);
+                    }
+                }
+
+                // Fallback to file's standard icon
+                if (!gicon) {
+                    gicon = this._fileInfo.get_icon();
+                }
+
                 if (gicon) {
                     this._icon = new St.Icon({
                         gicon: gicon,
@@ -175,7 +210,7 @@ const DesktopIcon = GObject.registerClass(
                         style_class: 'desktop-icon-image',
                     });
                 } else {
-                    // Fallback icon
+                    // Final fallback icon
                     this._icon = new St.Icon({
                         icon_name: 'text-x-generic',
                         icon_size: this._iconSize,
@@ -190,8 +225,11 @@ const DesktopIcon = GObject.registerClass(
 
         _getDisplayName() {
             const name = this._fileInfo.get_display_name();
-            // Truncate long names
-            return name.length > 20 ? name.substring(0, 17) + '...' : name;
+            // Allow up to ~40 chars for 2 lines, truncate after
+            if (name.length > 40) {
+                return name.substring(0, 37) + '...';
+            }
+            return name;
         }
 
         _setupEvents() {
@@ -218,10 +256,10 @@ const DesktopIcon = GObject.registerClass(
                     this._lastClickTime = now;
 
                     // Left click - start potential drag via extension's global handler
+                    // Don't select yet - wait until button release to know if it was a drag
                     const [stageX, stageY] = event.get_coords();
                     this._extension._startIconDrag(this, stageX, stageY);
 
-                    this._select();
                     return Clutter.EVENT_STOP;
                 } else if (button === 3) {
                     // Right click
@@ -233,15 +271,47 @@ const DesktopIcon = GObject.registerClass(
 
             // Hover effects
             this.connect('enter-event', () => {
-                if (!this._selected && !this._dragging) {
-                    this.add_style_pseudo_class('hover');
+                if (!this._dragging) {
+                    // Apply hover style directly
+                    this._setHoverStyle(true);
+                    // Scale up on hover - fixed pixel amount for consistent feel
+                    this._applyHoverScale(true);
                 }
             });
 
             this.connect('leave-event', () => {
                 if (!this._dragging) {
-                    this.remove_style_pseudo_class('hover');
+                    // Remove hover style
+                    this._setHoverStyle(false);
+                    // Reset scale
+                    this._applyHoverScale(false);
                 }
+            });
+        }
+
+        _setHoverStyle(hover) {
+            if (hover && !this._selected) {
+                this.set_style('background-color: rgba(255, 255, 255, 0.25);');
+            } else if (!hover && !this._selected) {
+                this.set_style('');
+            }
+        }
+
+        _applyHoverScale(hover) {
+            // Set pivot point to center for scaling from center
+            this.set_pivot_point(0.5, 0.5);
+
+            // Use fixed pixel increase (~6px) instead of percentage
+            // This makes the effect consistent across all icon sizes
+            const pixelIncrease = 6;
+            const baseSize = Math.max(this.width, this.height);
+            const scaleFactor = hover ? 1 + (pixelIncrease / baseSize) : 1.0;
+
+            this.ease({
+                scale_x: scaleFactor,
+                scale_y: scaleFactor,
+                duration: 100,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             });
         }
 
@@ -250,12 +320,15 @@ const DesktopIcon = GObject.registerClass(
             this._extension._deselectAll();
 
             this._selected = true;
-            this.add_style_pseudo_class('selected');
+            // Apply selected style with system accent color
+            const accentColor = this._extension._getAccentColor();
+            this.set_style(`background-color: ${accentColor};`);
         }
 
         deselect() {
             this._selected = false;
-            this.remove_style_pseudo_class('selected');
+            // Remove selected style
+            this.set_style('');
         }
 
         _open() {
@@ -1582,6 +1655,32 @@ export default class ObisionExtensionDesk extends Extension {
         return this._getBaseIconSize();
     }
 
+    _getAccentColor() {
+        // Get system accent color from GNOME settings
+        try {
+            const interfaceSettings = new Gio.Settings({ schema: 'org.gnome.desktop.interface' });
+            const accentColor = interfaceSettings.get_string('accent-color');
+
+            // Map GNOME accent color names to rgba values with transparency
+            const accentColors = {
+                'blue': 'rgba(53, 132, 228, 0.45)',
+                'teal': 'rgba(0, 150, 136, 0.45)',
+                'green': 'rgba(46, 194, 126, 0.45)',
+                'yellow': 'rgba(245, 194, 17, 0.45)',
+                'orange': 'rgba(255, 120, 0, 0.45)',
+                'red': 'rgba(237, 51, 59, 0.45)',
+                'pink': 'rgba(214, 51, 132, 0.45)',
+                'purple': 'rgba(145, 65, 172, 0.45)',
+                'slate': 'rgba(111, 131, 150, 0.45)',
+            };
+
+            return accentColors[accentColor] || accentColors['blue'];
+        } catch (e) {
+            // Fallback to blue if settings not available
+            return 'rgba(53, 132, 228, 0.45)';
+        }
+    }
+
     // ===== Public Notification API =====
 
     /**
@@ -1847,10 +1946,8 @@ export default class ObisionExtensionDesk extends Extension {
                 this._dragOriginalX = this._dragIcon.x;
                 this._dragOriginalY = this._dragIcon.y;
 
-                // Raise icon to top
-                const parent = this._dragIcon.get_parent();
-                if (parent)
-                    parent.set_child_above_sibling(this._dragIcon, null);
+                // Create drop indicator
+                this._createDropIndicator();
 
                 // Reset to eliminate jump
                 this._dragStartX = stageX;
@@ -1868,13 +1965,8 @@ export default class ObisionExtensionDesk extends Extension {
                     return Clutter.EVENT_STOP;
                 }
 
-                // Move icon
-                const currentDx = stageX - this._dragStartX;
-                const currentDy = stageY - this._dragStartY;
-                this._dragIcon.set_position(
-                    this._iconStartX + currentDx,
-                    this._iconStartY + currentDy
-                );
+                // Update drop indicator position instead of moving the icon
+                this._updateDropIndicator(stageX, stageY);
                 return Clutter.EVENT_STOP;
             }
         } else if (type === Clutter.EventType.BUTTON_RELEASE) {
@@ -1898,17 +1990,12 @@ export default class ObisionExtensionDesk extends Extension {
         this._dragIcon = null;
         this._isDragging = false;
 
+        // Destroy drop indicator
+        this._destroyDropIndicator();
+
         if (wasDragging) {
             icon._dragging = false;
             icon.remove_style_class_name('dragging');
-
-            // Animate back to original position
-            icon.ease({
-                x: this._dragOriginalX,
-                y: this._dragOriginalY,
-                duration: 200,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-            });
         }
     }
 
@@ -1918,9 +2005,17 @@ export default class ObisionExtensionDesk extends Extension {
         const icon = this._dragIcon;
         const wasDragging = this._isDragging;
 
+        // Get target cell from drop indicator before destroying it
+        const targetCol = this._dropTargetCol;
+        const targetRow = this._dropTargetRow;
+        const canDrop = this._canDrop;
+
         // Reset state first
         this._dragIcon = null;
         this._isDragging = false;
+
+        // Destroy drop indicator
+        this._destroyDropIndicator();
 
         if (wasDragging) {
             icon._dragging = false;
@@ -1928,27 +2023,12 @@ export default class ObisionExtensionDesk extends Extension {
 
             if (!this._cells) return;
 
-            // Remove icon from old cells
-            this.removeIconFromCells(icon);
+            // If we have a valid drop target, use it
+            if (canDrop && targetCol !== undefined && targetRow !== undefined) {
+                // Remove icon from old cells
+                this.removeIconFromCells(icon);
 
-            // Get icon center position to determine target cell
-            const cellWidth = this._getCellWidth();
-            const cellHeight = this._getCellHeight();
-            const iconCols = icon._cellSize?.cols || 1;
-            const iconRows = icon._cellSize?.rows || 1;
-
-            // Use icon center for determining cell
-            const centerX = icon.x + (cellWidth * iconCols) / 2;
-            const centerY = icon.y + (cellHeight * iconRows) / 2;
-
-            const targetCol = Math.floor(centerX / cellWidth);
-            const targetRow = Math.floor(centerY / cellHeight);
-
-            // Find free cell (target or nearest)
-            const freeCell = this.findNearestFreeCell(targetCol, targetRow, icon._cellSize || { cols: 1, rows: 1 }, icon);
-
-            if (freeCell) {
-                const cell = this.getCell(freeCell.col, freeCell.row);
+                const cell = this.getCell(targetCol, targetRow);
                 if (cell) {
                     // Animate to cell position
                     icon.ease({
@@ -1958,7 +2038,7 @@ export default class ObisionExtensionDesk extends Extension {
                         mode: Clutter.AnimationMode.EASE_OUT_QUAD,
                         onComplete: () => {
                             // Mark cells as occupied
-                            this.placeIconInCell(icon, freeCell.col, freeCell.row);
+                            this.placeIconInCell(icon, targetCol, targetRow);
                             this._saveIconPosition(icon._fileName, cell.x, cell.y);
                         }
                     });
@@ -1966,21 +2046,105 @@ export default class ObisionExtensionDesk extends Extension {
                 }
             }
 
-            // No free cell, return to original
-            icon.ease({
-                x: this._dragOriginalX,
-                y: this._dragOriginalY,
-                duration: 250,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                onComplete: () => {
-                    // Re-place in original cell
-                    const origCell = this.getCellAtPixel(this._dragOriginalX, this._dragOriginalY);
-                    if (origCell) {
-                        this.placeIconInCell(icon, origCell.col, origCell.row);
-                    }
-                }
-            });
+            // No valid drop, icon stays in place (original position)
+            // Re-place in original cell
+            const origCell = this.getCellAtPixel(this._dragOriginalX, this._dragOriginalY);
+            if (origCell) {
+                this.placeIconInCell(icon, origCell.col, origCell.row);
+            }
+        } else {
+            // Was not a drag, just a click - select the icon
+            icon._select();
         }
+    }
+
+    _createDropIndicator() {
+        if (this._dropIndicator) {
+            this._dropIndicator.destroy();
+        }
+
+        this._dropIndicator = new St.Widget({
+            style_class: 'drop-indicator',
+            reactive: false,
+        });
+
+        this._grid.add_child(this._dropIndicator);
+        this._dropIndicator.hide();
+        this._canDrop = false;
+    }
+
+    _updateDropIndicator(stageX, stageY) {
+        if (!this._dropIndicator || !this._dragIcon) return;
+
+        const cellWidth = this._getCellWidth();
+        const cellHeight = this._getCellHeight();
+        const iconCols = this._dragIcon._cellSize?.cols || 1;
+        const iconRows = this._dragIcon._cellSize?.rows || 1;
+
+        // Convert stage coordinates to grid coordinates
+        const [gridX, gridY] = this._grid.get_transformed_position();
+        const relX = stageX - gridX;
+        const relY = stageY - gridY;
+
+        // Calculate target cell (top-left of where icon would go)
+        const targetCol = Math.floor(relX / cellWidth);
+        const targetRow = Math.floor(relY / cellHeight);
+
+        // Check if the icon fits in this position
+        const canFit = this._canIconFitAt(targetCol, targetRow, iconCols, iconRows, this._dragIcon);
+
+        if (canFit) {
+            // Show indicator at target cells
+            const x = targetCol * cellWidth;
+            const y = targetRow * cellHeight;
+            const width = cellWidth * iconCols;
+            const height = cellHeight * iconRows;
+
+            this._dropIndicator.set_position(x, y);
+            this._dropIndicator.set_size(width, height);
+            this._dropIndicator.show();
+
+            this._dropTargetCol = targetCol;
+            this._dropTargetRow = targetRow;
+            this._canDrop = true;
+        } else {
+            // Hide indicator - can't drop here
+            this._dropIndicator.hide();
+            this._canDrop = false;
+        }
+    }
+
+    _canIconFitAt(col, row, cols, rows, draggedIcon) {
+        // Check bounds
+        const gridCols = this._settings.get_int('grid-columns');
+        const gridRows = this._settings.get_int('grid-rows');
+
+        if (col < 0 || row < 0 || col + cols > gridCols || row + rows > gridRows) {
+            return false;
+        }
+
+        // Check if all cells are free (ignoring the dragged icon's current cells)
+        for (let c = col; c < col + cols; c++) {
+            for (let r = row; r < row + rows; r++) {
+                const cell = this.getCell(c, r);
+                if (!cell) return false;
+                if (cell.icon && cell.icon !== draggedIcon) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    _destroyDropIndicator() {
+        if (this._dropIndicator) {
+            this._dropIndicator.destroy();
+            this._dropIndicator = null;
+        }
+        this._dropTargetCol = undefined;
+        this._dropTargetRow = undefined;
+        this._canDrop = false;
     }
 
     _getValidBounds() {

@@ -13,21 +13,31 @@
     transition-duration: 150ms;
 }
 
-/* Normal icons - minimal styling */
-.desktop-icon:hover {
-    background-color: rgba(255, 255, 255, 0.15);
+/* Normal icons - hover effect */
+.desktop-icon.hover {
+    background-color: rgba(255, 255, 255, 0.3);
+    border-radius: 8px;
 }
 
-.desktop-icon:selected {
-    background-color: rgba(53, 132, 228, 0.35);
+/* Selected - strong blue highlight */
+.desktop-icon.selected {
+    background-color: rgba(53, 132, 228, 0.5);
+    border-radius: 8px;
 }
 
-.desktop-icon:focus {
+.desktop-icon.focus {
     background-color: rgba(53, 132, 228, 0.2);
 }
 
 .desktop-icon.dragging {
-    opacity: 0.7;
+    opacity: 0.5;
+}
+
+/* ===== Drop Indicator ===== */
+/* Shows where an icon can be dropped during drag */
+.drop-indicator {
+    background-color: rgba(53, 132, 228, 0.3);
+    border: 2px dashed rgba(53, 132, 228, 0.8);
 }
 
 /* ===== Widget Mode ===== */
