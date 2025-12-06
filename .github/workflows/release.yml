@@ -19,16 +19,34 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y glib-2.0-dev gnome-shell-common gettext
+        sudo apt-get install -y glib-2.0-dev gettext zip
       
     - name: Build extension
       run: |
         # Compile GSettings schemas
         glib-compile-schemas schemas/
         
-        # Create builddir and pack extension
+        # Create builddir
         mkdir -p builddir
-        gnome-extensions pack --force --extra-source=schemas/ --out-dir=builddir
+        
+        # Create temporary directory for packaging
+        TEMP_DIR=$(mktemp -d)
+        
+        # Copy extension files
+        cp extension.js "$TEMP_DIR/"
+        cp prefs.js "$TEMP_DIR/"
+        cp metadata.json "$TEMP_DIR/"
+        cp stylesheet.css "$TEMP_DIR/"
+        cp -r schemas "$TEMP_DIR/"
+        
+        # Create the zip file
+        cd "$TEMP_DIR"
+        zip -r obision-extension-desk-grid@obision.com.shell-extension.zip .
+        mv obision-extension-desk-grid@obision.com.shell-extension.zip "$GITHUB_WORKSPACE/builddir/"
+        
+        # Cleanup
+        cd "$GITHUB_WORKSPACE"
+        rm -rf "$TEMP_DIR"
         
     - name: Verify extension exists
       run: |
