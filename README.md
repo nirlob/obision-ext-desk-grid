@@ -13,12 +13,13 @@ A GNOME Shell extension that provides desktop icons functionality with support f
 
 ## Installation
 
-### From Release
+### From Release (Debian/Ubuntu)
 
-Download the latest `.shell-extension.zip` from [Releases](https://github.com/nirlob/obision-extension-desk/releases) and install:
+Download the latest `.deb` package from [Releases](https://github.com/nirlob/obision-extension-desk/releases) and install:
 
 ```bash
-gnome-extensions install obision-extension-desk-grid@obision.com.shell-extension.zip
+sudo dpkg -i obision-extension-desk-grid.deb
+sudo apt-get install -f
 gnome-extensions enable obision-extension-desk-grid@obision.com
 ```
 
@@ -52,6 +53,9 @@ npm run enable
 | `npm run build` | Compile schemas and pack extension into builddir/ |
 | `npm run deploy` | Build, install, and show restart instructions |
 | `npm run update` | Build, install, and reload (X11 only) |
+| `npm run deb-build` | Build Debian package (.deb) |
+| `npm run deb-install` | Install the .deb package locally |
+| `npm run deb-uninstall` | Uninstall the .deb package |
 | `npm run release` | Create new release (bump version, tag, push) |
 | `npm run logs` | View GNOME Shell logs in real-time |
 | `npm run clean` | Remove build artifacts |
@@ -83,11 +87,11 @@ npm run release
 
 This will:
 1. Bump the version number (increments minor version)
-2. Update `package.json` and `metadata.json`
+2. Update `package.json`, `metadata.json`, and `debian/changelog`
 3. Commit the changes
 4. Create a git tag
 5. Push to GitHub
-6. GitHub Actions will build and attach the extension to the release
+6. GitHub Actions will build the .deb package and attach it to the release
 
 ## Configuration
 

@@ -37,9 +37,27 @@ echo "📝 Updating metadata.json..."
 jq --arg version "$METADATA_VERSION" '.version = ($version | tonumber)' metadata.json > metadata.json.tmp
 mv metadata.json.tmp metadata.json
 
+# Update debian/changelog
+echo "📝 Updating debian/changelog..."
+CURRENT_DATE=$(date -R)
+AUTHOR_NAME="Jose Francisco Gonzalez"
+AUTHOR_EMAIL="jfgs1609@gmail.com"
+
+cat > debian/changelog.tmp << EOF
+obision-extension-desk-grid ($NEW_VERSION-1) unstable; urgency=medium
+
+  * Release version $NEW_VERSION
+
+ -- $AUTHOR_NAME <$AUTHOR_EMAIL>  $CURRENT_DATE
+
+EOF
+
+cat debian/changelog >> debian/changelog.tmp
+mv debian/changelog.tmp debian/changelog
+
 # Commit changes
 echo "💾 Committing changes..."
-git add metadata.json package.json package-lock.json
+git add metadata.json package.json package-lock.json debian/changelog
 git commit -m "Release version $NEW_VERSION"
 
 # Create tag

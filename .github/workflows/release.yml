@@ -1,4 +1,4 @@
-name: Build and Release Extension
+name: Build and Release DEB Package
 
 on:
   push:
@@ -9,73 +9,60 @@ permissions:
   contents: write
 
 jobs:
-  build-extension:
+  build-deb:
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Install dependencies
+    - name: Install build dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y glib-2.0-dev gettext zip
+        sudo apt-get install -y devscripts equivs glib-2.0-dev gnome-shell-common
+        sudo mk-build-deps -i -r -t "apt-get -y --no-install-recommends" debian/control
       
-    - name: Build extension
+    - name: Build DEB package
       run: |
-        # Compile GSettings schemas
-        glib-compile-schemas schemas/
-        
-        # Create builddir
+        dpkg-buildpackage -us -uc -b
         mkdir -p builddir
+        mv ../gnome-shell-extension-obision-desk-grid_*.deb builddir/obision-extension-desk-grid.deb
         
-        # Create temporary directory for packaging
-        TEMP_DIR=$(mktemp -d)
-        
-        # Copy extension files
-        cp extension.js "$TEMP_DIR/"
-        cp prefs.js "$TEMP_DIR/"
-        cp metadata.json "$TEMP_DIR/"
-        cp stylesheet.css "$TEMP_DIR/"
-        cp -r schemas "$TEMP_DIR/"
-        
-        # Create the zip file
-        cd "$TEMP_DIR"
-        zip -r obision-extension-desk-grid@obision.com.shell-extension.zip .
-        mv obision-extension-desk-grid@obision.com.shell-extension.zip "$GITHUB_WORKSPACE/builddir/"
-        
-        # Cleanup
-        cd "$GITHUB_WORKSPACE"
-        rm -rf "$TEMP_DIR"
-        
-    - name: Verify extension exists
+    - name: Verify DEB exists
       run: |
-        if [ ! -f builddir/obision-extension-desk-grid@obision.com.shell-extension.zip ]; then
-          echo "ERROR: Extension file not found!"
+        if [ ! -f builddir/obision-extension-desk-grid.deb ]; then
+          echo "ERROR: DEB file not found!"
           echo "Contents of builddir:"
           ls -la builddir/ || echo "builddir not found"
+          echo "Contents of parent dir:"
+          ls -la ../
           exit 1
         fi
-        echo "✅ Extension file found:"
-        ls -lh builddir/obision-extension-desk-grid@obision.com.shell-extension.zip
+        echo "✅ DEB file found:"
+        ls -lh builddir/obision-extension-desk-grid.deb
       
-    - name: Create Release and Upload Extension
+    - name: Create Release and Upload DEB
       uses: softprops/action-gh-release@v1
       with:
-        files: builddir/obision-extension-desk-grid@obision.com.shell-extension.zip
+        files: builddir/obision-extension-desk-grid.deb
         generate_release_notes: true
         body: |
           ## Installation
           
-          Download the `.shell-extension.zip` file and install it:
+          Download the `.deb` file and install it:
           
           ```bash
-          gnome-extensions install obision-extension-desk-grid@obision.com.shell-extension.zip
-          gnome-extensions enable obision-extension-desk-grid@obision.com
+          sudo dpkg -i obision-extension-desk-grid.deb
+          sudo apt-get install -f
           ```
           
           Then restart GNOME Shell:
           - **X11**: Press `Alt+F2`, type `r`, press `Enter`
           - **Wayland**: Log out and log back in
+          
+          Enable the extension:
+          ```bash
+          gnome-extensions enable obision-extension-desk-grid@obision.com
+          ```
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
