@@ -1,0 +1,63 @@
+name: Build and Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-extension:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y glib-2.0-dev gnome-shell-common gettext
+      
+    - name: Build extension
+      run: |
+        # Compile GSettings schemas
+        glib-compile-schemas schemas/
+        
+        # Create builddir and pack extension
+        mkdir -p builddir
+        gnome-extensions pack --force --extra-source=schemas/ --out-dir=builddir
+        
+    - name: Verify extension exists
+      run: |
+        if [ ! -f builddir/obision-extension-desk-grid@obision.com.shell-extension.zip ]; then
+          echo "ERROR: Extension file not found!"
+          echo "Contents of builddir:"
+          ls -la builddir/ || echo "builddir not found"
+          exit 1
+        fi
+        echo "✅ Extension file found:"
+        ls -lh builddir/obision-extension-desk-grid@obision.com.shell-extension.zip
+      
+    - name: Create Release and Upload Extension
+      uses: softprops/action-gh-release@v1
+      with:
+        files: builddir/obision-extension-desk-grid@obision.com.shell-extension.zip
+        generate_release_notes: true
+        body: |
+          ## Installation
+          
+          Download the `.shell-extension.zip` file and install it:
+          
+          ```bash
+          gnome-extensions install obision-extension-desk-grid@obision.com.shell-extension.zip
+          gnome-extensions enable obision-extension-desk-grid@obision.com
+          ```
+          
+          Then restart GNOME Shell:
+          - **X11**: Press `Alt+F2`, type `r`, press `Enter`
+          - **Wayland**: Log out and log back in
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
