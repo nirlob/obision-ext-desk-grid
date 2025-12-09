@@ -1274,50 +1274,61 @@ const DesktopGrid = GObject.registerClass(
             });
             this._desktopMenu.addMenuItem(prefsItem);
 
-            // Check if obision-extension-grid is installed
-            try {
-                const gridExtension = Main.extensionManager.lookup('obision-extension-grid@obision.com');
+            // Add separator before One Win section
+            this._desktopMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-                if (gridExtension) {
-                    // Add separator
-                    this._desktopMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            // Check if obision-extension-one-win is installed
+            try {
+                const oneWinExtension = Main.extensionManager.lookup('obision-extension-one-win@obision.com');
+
+                log(`[Obision] One Win extension lookup result: ${oneWinExtension ? 'found' : 'not found'}`);
+
+                if (oneWinExtension) {
+                    log(`[Obision] One Win extension state: ${oneWinExtension.state}`);
 
                     // Check current state when menu opens (state 1 = ENABLED)
-                    const isCurrentlyEnabled = gridExtension.state === 1;
+                    const isCurrentlyEnabled = oneWinExtension.state === 1;
                     const menuText = isCurrentlyEnabled ? 'Disable One Win' : 'Enable One Win';
                     const oneWinItem = new PopupMenu.PopupMenuItem(menuText);
 
                     oneWinItem.connect('activate', () => {
                         // Check state again at click time
-                        const currentState = gridExtension.state === 1;
+                        const currentState = oneWinExtension.state === 1;
 
                         if (currentState) {
                             // Extension is enabled: disable it
                             try {
                                 Gio.Subprocess.new(
-                                    ['gnome-extensions', 'disable', 'obision-extension-grid@obision.com'],
+                                    ['gnome-extensions', 'disable', 'obision-extension-one-win@obision.com'],
                                     Gio.SubprocessFlags.NONE
                                 );
                             } catch (e) {
-                                log(`[Obision] Error disabling grid extension: ${e}`);
+                                log(`[Obision] Error disabling One Win extension: ${e}`);
                             }
                         } else {
                             // Extension is disabled: enable it
                             try {
                                 Gio.Subprocess.new(
-                                    ['gnome-extensions', 'enable', 'obision-extension-grid@obision.com'],
+                                    ['gnome-extensions', 'enable', 'obision-extension-one-win@obision.com'],
                                     Gio.SubprocessFlags.NONE
                                 );
                             } catch (e) {
-                                log(`[Obision] Error enabling grid extension: ${e}`);
+                                log(`[Obision] Error enabling One Win extension: ${e}`);
                             }
                         }
                     });
 
                     this._desktopMenu.addMenuItem(oneWinItem);
+                    log(`[Obision] One Win menu item added`);
+                } else {
+                    // Add placeholder to show extension is not installed
+                    const notInstalledItem = new PopupMenu.PopupMenuItem('One Win (no instalado)');
+                    notInstalledItem.setSensitive(false);
+                    this._desktopMenu.addMenuItem(notInstalledItem);
+                    log(`[Obision] One Win extension not installed, added placeholder`);
                 }
             } catch (e) {
-                log(`[Obision] Error checking grid extension: ${e}\n${e.stack}`);
+                log(`[Obision] Error checking One Win extension: ${e}\n${e.stack}`);
             }
 
             // Add menu to UI group (above windows)

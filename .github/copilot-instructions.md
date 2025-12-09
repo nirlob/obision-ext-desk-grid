@@ -14,7 +14,7 @@ GNOME Shell extension for desktop icons with grid-based layout. Icons can span m
    - Manages lifecycle (`enable()`/`disable()`)
    - Maintains `_cells` array: bidimensional grid tracking which cells are occupied by which icons
    - Handles file monitoring via `Gio.FileMonitor` on Desktop directory
-   - Stores per-icon metadata in GSettings: `icon-sizes`, `icon-elevations`, `icon-backgrounds`, `icon-positions`
+   - Stores per-icon metadata in GSettings: `custom-icon-sizes`, `icon-elevations`, `icon-backgrounds`, `icon-widgets`
 
 2. **`DesktopGrid`** (St.Widget subclass)
    - Container positioned at `Main.layoutManager._backgroundGroup` (desktop layer)
@@ -30,7 +30,8 @@ GNOME Shell extension for desktop icons with grid-based layout. Icons can span m
    - Width/height fixed to span N×M cells (e.g., 2x2 icon = 2 cells wide × 2 cells tall)
    - Icon image size calculated from available space minus padding and label height
    - Context menu via `PopupMenu.PopupMenu` for size/style changes
-   - CSS classes: `elevation-0` to `elevation-3`, `bg-none`/`bg-frost`/`bg-glass`, `widget-mode`
+   - CSS classes: `bg-none`/`bg-light`/`bg-dark`/`bg-accent`, `widget-mode`
+   - Elevation applied via `icon-shadow` property in JavaScript (not CSS classes)
 
 ### Grid System Architecture
 
@@ -48,17 +49,17 @@ _buildCellGrid() {
 
 // 2. Icon requests cell space when created
 const cellSize = extension._getIconCellSize(fileName); // e.g., {cols: 2, rows: 1}
-const position = extension.findFreeSpace(cellSize); // Searches _cells array
+const position = extension.findFreeCell(cellSize); // Searches _cells array row-by-row, col-by-col
 
-// 3. Icon reserves cells
-extension.occupyCells(col, row, cellSize, iconInstance);
+// 3. Icon reserves cells (marks them as occupied)
+extension.placeIconInCell(iconInstance, col, row);
 
 // 4. Icon size calculated from cells
 const cellWidth = extension._getCellWidth(); // workArea.width / gridColumns
 const iconPixelWidth = cellWidth * cellSize.cols;
 ```
 
-**Cell size mapping** (stored in GSettings `icon-sizes` as JSON):
+**Cell size mapping** (stored in GSettings `custom-icon-sizes` as JSON):
 ```javascript
 {
     "document.pdf": "2x2",    // 2 cells wide, 2 tall
@@ -81,6 +82,11 @@ import Pango from 'gi://Pango';  // For text layout
 // GNOME Shell modules use resource:// protocol
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+
+// prefs.js uses Gtk4/Libadwaita (NOT in extension.js!)
+import Adw from 'gi://Adw';          // Libadwaita widgets
+import Gtk from 'gi://Gtk';          // GTK4
+import Gdk from 'gi://Gdk';          // GDK for colors
 ```
 
 ## Development Workflow
@@ -173,16 +179,16 @@ const ICON_CELL_SIZES = {
 ```
 
 **Widget mode** (elevation + backgrounds):
-- Icons can have `elevation` (0-3) for shadow depth
-- Backgrounds: `none`, `frost` (frosted glass), `glass` (translucent)
+- Icons can have `elevation` (0-3) for shadow depth - applied via `icon-shadow` property in JavaScript
+- Backgrounds: `none`, `light` (frosted glass), `dark`, `accent` (uses GNOME accent color)
 - Stored separately in GSettings: `icon-elevations`, `icon-backgrounds`
-- Applied via CSS classes in `stylesheet.css`
+- Background styles applied via CSS classes in `stylesheet.css`: `bg-none`, `bg-light`, `bg-dark`, `bg-accent`
 
 ## File Structure
 
 ```
 ├── extension.js          # Extension entry + DesktopGrid + DesktopIcon
-├── prefs.js              # Preferences using Adw widgets
+├── prefs.js              # Preferences using Adw widgets (Gtk4/Libadwaita)
 ├── stylesheet.css        # St CSS (subset of CSS3)
 ├── metadata.json         # UUID, shell-version, schema
 ├── schemas/              # GSettings XML schema
@@ -222,10 +228,12 @@ log('message');  # global log function
 ## Style Guide
 
 - Use ES modules (`import`/`export`)
-- Single quotes, 4-space indent, trailing commas
+- Single quotes, 4-space indent, trailing commas (enforced by Prettier)
 - Prefix private members with `_`
 - GObject classes use PascalCase
 - Clean up in `disable()` - no exceptions
+- ESLint + Prettier configured: `npm run lint` or `npm run format`
+- Line width: 100 characters, Unix line endings (LF)
 
 ## Obision Extension Ecosystem
 
@@ -236,17 +244,21 @@ This extension is part of the **Obision** project family. Related extensions sha
 | Extension | Purpose | UUID |
 |-----------|---------|------|
 | `obision-extension-dash` | Bottom dock/panel with app launchers | `obision-extension-dash@obision.com` |
-| `obision-extension-grid` | Stage Manager-style window management | `obision-extension-grid@obision.com` |
-| `obision-extension-desk` | Desktop icons (this extension) | `obision-extension-desk@obision.com` |
+| `obision-extension-one-win` | Stage Manager-style window management (One Win) | `obision-extension-one-win@obision.com` |
+| `obision-extension-desk-grid` | Desktop icons (this extension) | `obision-extension-desk-grid@obision.com` |
 
 ### Integration Patterns
 
 **Detecting Other Obision Extensions:**
 ```javascript
 // Check if another Obision extension is enabled
-const ExtensionUtils = imports.misc.extensionUtils;
-const dashExtension = ExtensionUtils.extensions['obision-extension-dash@obision.com'];
-if (dashExtension?.state === ExtensionUtils.ExtensionState.ENABLED) {
+const oneWinExtension = Main.extensionManager.lookup('obision-extension-one-win@obision.com');
+if (oneWinExtension?.state === 1) { // state 1 = ENABLED
+    // One Win extension is enabled
+}
+
+const dashExtension = Main.extensionManager.lookup('obision-extension-dash@obision.com');
+if (dashExtension?.state === 1) {
     // Adjust layout to account for dash panel
 }
 ```
@@ -273,6 +285,23 @@ Currently no direct communication - each extension operates independently but re
 - Drag files from desktop to dash favorites
 - Unified settings panel for Obision extensions
 - Shared theming preferences
+
+## CI/CD Pipeline
+
+**Automated Release Process** (via GitHub Actions):
+1. Run `npm run release` locally to bump version, commit, tag, and push
+2. GitHub Actions detects tag push (`v*`)
+3. Workflow builds .deb package on Ubuntu runner
+4. Creates GitHub release with auto-generated notes
+5. Attaches .deb file to release
+
+**Release script** (`scripts/release.sh`):
+- Increments minor version in `package.json`
+- Updates `metadata.json` version (concatenates major+minor as single number)
+- Updates `debian/changelog` with new entry
+- Commits, tags, and pushes to trigger CI
+
+**Manual .deb build**: `npm run deb-build` (requires Debian build tools)
 
 ## Reference: DING Extension Architecture
 
