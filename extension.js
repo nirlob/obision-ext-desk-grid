@@ -1672,7 +1672,7 @@ export default class ObisionExtensionDesk extends Extension {
      * Listen to its settings for immediate grid updates when dash changes
      */
     _setupObisionDashIntegration() {
-        const DASH_SCHEMA = 'org.gnome.shell.extensions.obision-extension-dash';
+        const DASH_SCHEMA = 'com.obision.extensions.dash';
 
         try {
             // Try to get obision-dash settings
@@ -1939,27 +1939,34 @@ export default class ObisionExtensionDesk extends Extension {
     _getAccentColor() {
         // Get system accent color from GNOME settings
         try {
-            const interfaceSettings = new Gio.Settings({ schema: 'org.gnome.desktop.interface' });
-            const accentColor = interfaceSettings.get_string('accent-color');
+            const schemaSource = Gio.SettingsSchemaSource.get_default();
+            const schema = schemaSource.lookup('org.gnome.desktop.interface', true);
 
-            // Map GNOME accent color names to rgba values with transparency
-            const accentColors = {
-                'blue': 'rgba(53, 132, 228, 0.45)',
-                'teal': 'rgba(0, 150, 136, 0.45)',
-                'green': 'rgba(46, 194, 126, 0.45)',
-                'yellow': 'rgba(245, 194, 17, 0.45)',
-                'orange': 'rgba(255, 120, 0, 0.45)',
-                'red': 'rgba(237, 51, 59, 0.45)',
-                'pink': 'rgba(214, 51, 132, 0.45)',
-                'purple': 'rgba(145, 65, 172, 0.45)',
-                'slate': 'rgba(111, 131, 150, 0.45)',
-            };
+            if (schema) {
+                const interfaceSettings = new Gio.Settings({ settings_schema: schema });
+                const accentColor = interfaceSettings.get_string('accent-color');
 
-            return accentColors[accentColor] || accentColors['blue'];
+                // Map GNOME accent color names to rgba values with transparency
+                const accentColors = {
+                    'blue': 'rgba(53, 132, 228, 0.45)',
+                    'teal': 'rgba(0, 150, 136, 0.45)',
+                    'green': 'rgba(46, 194, 126, 0.45)',
+                    'yellow': 'rgba(245, 194, 17, 0.45)',
+                    'orange': 'rgba(255, 120, 0, 0.45)',
+                    'red': 'rgba(237, 51, 59, 0.45)',
+                    'pink': 'rgba(214, 51, 132, 0.45)',
+                    'purple': 'rgba(145, 65, 172, 0.45)',
+                    'slate': 'rgba(111, 131, 150, 0.45)',
+                };
+
+                return accentColors[accentColor] || accentColors['blue'];
+            }
         } catch (e) {
             // Fallback to blue if settings not available
-            return 'rgba(53, 132, 228, 0.45)';
+            log(`[Obision] Could not get accent color: ${e.message}`);
         }
+
+        return 'rgba(53, 132, 228, 0.45)';
     }
 
     // ===== Public Notification API =====

@@ -71,7 +71,7 @@ obision-extension-desk/
 ├── stylesheet.css    # CSS styles
 ├── metadata.json     # Extension metadata
 ├── schemas/          # GSettings schemas
-│   └── org.gnome.shell.extensions.obision-extension-desk-grid.gschema.xml
+│   └── com.obision.extensions.desk-grid.gschema.xml
 ├── scripts/          # Build and release scripts
 │   └── release.sh    # Automated release script
 └── package.json      # npm scripts and dependencies
