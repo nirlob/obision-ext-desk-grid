@@ -164,5 +164,12 @@
       <description>Maximum allowed notification level: silent, subtle, normal, attention, critical</description>
     </key>
 
+    <!-- Keyboard Shortcuts -->
+    <key name="obision-desk-new-folder" type="as">
+      <default><![CDATA[['<Shift><Control>n']]]></default>
+      <summary>Create Folder Shortcut</summary>
+      <description>Keyboard shortcut to open the Create Folder dialog</description>
+    </key>
+
   </schema>
 </schemalist>

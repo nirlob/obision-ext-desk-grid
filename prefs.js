@@ -93,6 +93,9 @@ export default class ObisionExtensionDeskPreferences extends ExtensionPreference
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
 
+        // Set window title
+        window.set_title('Desktop Preferences');
+
         // Create a preferences page
         const page = new Adw.PreferencesPage({
             title: 'General',

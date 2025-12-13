@@ -18,7 +18,10 @@ import { Extension, gettext as _ } from 'resource:///org/gnome/shell/extensions/
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
+import * as Dialog from 'resource:///org/gnome/shell/ui/dialog.js';
 import * as ExtensionUtils from 'resource:///org/gnome/shell/misc/extensionUtils.js';
+import Shell from 'gi://Shell';
+import Meta from 'gi://Meta';
 
 // Icon sizes based on cell count (cols x rows)
 // Base icon size fits in 1 cell, larger icons span multiple cells
@@ -66,11 +69,11 @@ const DesktopIcon = GObject.registerClass(
 
             // Calculate icon size based on available space
             // For the icon image, use the minimum dimension to keep it square
-            // Account for padding and label height
-            const padding = 16; // Total padding (top + bottom or left + right)
+            // Account for label height and internal spacing
+            const internalSpacing = 8; // Minimal spacing for visual comfort
             const labelHeight = LABEL_HEIGHT;
-            const availableWidth = widgetWidth - padding;
-            const availableHeight = widgetHeight - labelHeight - padding;
+            const availableWidth = widgetWidth - internalSpacing;
+            const availableHeight = widgetHeight - labelHeight - internalSpacing;
             const iconSize = Math.max(MIN_ICON_SIZE, Math.min(availableWidth, availableHeight));
 
             super._init({
@@ -229,11 +232,15 @@ const DesktopIcon = GObject.registerClass(
                 // Check for special icons first
                 const isTrash = this._fileInfo.get_attribute_boolean('special::is-trash');
                 const isHome = this._fileInfo.get_attribute_boolean('special::is-home');
+                const fileType = this._fileInfo.get_file_type();
 
                 if (isTrash) {
                     iconName = 'user-trash-full';
                 } else if (isHome) {
                     iconName = 'user-home';
+                } else if (fileType === Gio.FileType.DIRECTORY) {
+                    // For folders, use folder icon directly
+                    iconName = 'folder';
                 } else {
                     // Check if it's a .desktop file
                     const fileName = this._fileInfo.get_name();
@@ -253,7 +260,14 @@ const DesktopIcon = GObject.registerClass(
 
                     // Fallback to content type icon
                     if (!gicon) {
-                        const contentType = this._fileInfo.get_content_type();
+                        let contentType = this._fileInfo.get_content_type();
+                        // Always try to guess from filename for better detection
+                        if (fileName) {
+                            const [guessedType, certain] = Gio.content_type_guess(fileName, null);
+                            if (guessedType) {
+                                contentType = guessedType;
+                            }
+                        }
                         if (contentType) {
                             const appInfo = Gio.AppInfo.get_default_for_type(contentType, false);
                             gicon = appInfo ? appInfo.get_icon() : Gio.content_type_get_icon(contentType);
@@ -314,6 +328,23 @@ const DesktopIcon = GObject.registerClass(
         }
 
         _getDisplayName() {
+            // Check if it's the Home folder
+            const isHome = this._fileInfo.get_attribute_boolean('special::is-home');
+            if (isHome) {
+                // Get the real user name (full name) from /etc/passwd or use username as fallback
+                try {
+                    const userName = GLib.get_real_name();
+                    // GLib.get_real_name() returns "Unknown" if not set, fallback to username
+                    if (userName && userName !== 'Unknown') {
+                        return userName;
+                    }
+                } catch (e) {
+                    log(`Error getting real name: ${e}`);
+                }
+                // Fallback to username
+                return GLib.get_user_name();
+            }
+
             // For .desktop files, get the app name from the file
             const fileName = this._fileInfo.get_name();
             if (fileName && fileName.endsWith('.desktop')) {
@@ -406,8 +437,16 @@ const DesktopIcon = GObject.registerClass(
 
         _open() {
             try {
-                const file = this._fileInfo.get_attribute_object('standard::file');
-                if (!file) return;
+                // Get file from fileInfo
+                let file = this._fileInfo.get_attribute_object('standard::file');
+
+                // If file attribute not available, construct from path
+                if (!file) {
+                    const desktopPath = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DESKTOP);
+                    const fileName = this._fileInfo.get_name();
+                    const filePath = GLib.build_filenamev([desktopPath, fileName]);
+                    file = Gio.File.new_for_path(filePath);
+                }
 
                 // Check if it's a .desktop file - launch the application
                 const fileName = this._fileInfo.get_name();
@@ -432,16 +471,17 @@ const DesktopIcon = GObject.registerClass(
                 }
 
                 // Regular file/folder - open with default app
-                const appInfo = Gio.AppInfo.get_default_for_type(
-                    this._fileInfo.get_content_type(),
-                    false
-                );
-                if (appInfo) {
-                    appInfo.launch([file], null);
-                } else {
-                    // Open with default handler
-                    Gio.app_info_launch_default_for_uri(file.get_uri(), null);
+                const contentType = this._fileInfo.get_content_type();
+                if (contentType) {
+                    const appInfo = Gio.AppInfo.get_default_for_type(contentType, false);
+                    if (appInfo) {
+                        appInfo.launch([file], null);
+                        return;
+                    }
                 }
+
+                // Fallback: Open with default handler
+                Gio.app_info_launch_default_for_uri(file.get_uri(), null);
             } catch (e) {
                 log(`Error opening file: ${e}`);
             }
@@ -994,6 +1034,8 @@ const DesktopIcon = GObject.registerClass(
         }
 
         _showRemoveConfirmDialog() {
+            log(`[Obision] Opening remove dialog for: ${this._fileName}`);
+
             // Close context menu first
             this._closeContextMenu();
 
@@ -1046,12 +1088,17 @@ const DesktopIcon = GObject.registerClass(
 
         _moveToTrash() {
             try {
+                log(`[Obision] Attempting to trash: ${this._fileName}`);
                 const file = this.getFile();
                 if (file) {
+                    log(`[Obision] File path: ${file.get_path()}`);
                     file.trash(null);
+                    log(`[Obision] Successfully trashed: ${this._fileName}`);
+                } else {
+                    log(`[Obision] Could not get file object for: ${this._fileName}`);
                 }
             } catch (e) {
-                log(`Error moving to trash: ${e}`);
+                log(`[Obision] Error moving to trash: ${e}`);
             }
         }
 
@@ -1094,7 +1141,21 @@ const DesktopIcon = GObject.registerClass(
         }
 
         getFile() {
-            return this._fileInfo.get_attribute_object('standard::file');
+            try {
+                // First try to get from fileInfo
+                const file = this._fileInfo.get_attribute_object('standard::file');
+                if (file) {
+                    return file;
+                }
+
+                // Fallback: construct file from desktop path and fileName
+                const desktopPath = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DESKTOP);
+                const filePath = GLib.build_filenamev([desktopPath, this._fileName]);
+                return Gio.File.new_for_path(filePath);
+            } catch (e) {
+                log(`[Obision] Error getting file for ${this._fileName}: ${e}`);
+                return null;
+            }
         }
 
         getFileName() {
@@ -1260,21 +1321,20 @@ const DesktopGrid = GObject.registerClass(
             // Create popup menu anchored to dummy widget
             this._desktopMenu = new PopupMenu.PopupMenu(this._menuAnchor, 0, St.Side.TOP);
 
-            // Preferences item
-            const prefsItem = new PopupMenu.PopupMenuItem('Preferencias de escritorio');
-            prefsItem.connect('activate', () => {
-                try {
-                    Gio.Subprocess.new(
-                        ['gnome-extensions', 'prefs', 'obision-extension-desk-grid@obision.com'],
-                        Gio.SubprocessFlags.NONE
-                    );
-                } catch (e) {
-                    log(`[Obision] Error opening prefs: ${e}`);
-                }
+            // Create Folder item with accelerator
+            const createFolderItem = new PopupMenu.PopupMenuItem('Create Folder...');
+            createFolderItem.connect('activate', () => {
+                this._showNewFolderDialog();
             });
-            this._desktopMenu.addMenuItem(prefsItem);
+            // Add accelerator hint text
+            const accelLabel = new St.Label({
+                text: 'Shift+Ctrl+N',
+                style: 'font-size: 0.9em; color: rgba(255,255,255,0.5);',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            createFolderItem.add_child(accelLabel);
+            this._desktopMenu.addMenuItem(createFolderItem);
 
-            // Add separator before One Win section
             this._desktopMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
             // Check if obision-extension-one-win is installed
@@ -1288,25 +1348,11 @@ const DesktopGrid = GObject.registerClass(
 
                     // Check current state when menu opens (state 1 = ENABLED)
                     const isCurrentlyEnabled = oneWinExtension.state === 1;
-                    const menuText = isCurrentlyEnabled ? 'Disable One Win' : 'Enable One Win';
-                    const oneWinItem = new PopupMenu.PopupMenuItem(menuText);
+                    const oneWinItem = new PopupMenu.PopupSwitchMenuItem('One Win Mode', isCurrentlyEnabled);
 
-                    oneWinItem.connect('activate', () => {
-                        // Check state again at click time
-                        const currentState = oneWinExtension.state === 1;
-
-                        if (currentState) {
-                            // Extension is enabled: disable it
-                            try {
-                                Gio.Subprocess.new(
-                                    ['gnome-extensions', 'disable', 'obision-extension-one-win@obision.com'],
-                                    Gio.SubprocessFlags.NONE
-                                );
-                            } catch (e) {
-                                log(`[Obision] Error disabling One Win extension: ${e}`);
-                            }
-                        } else {
-                            // Extension is disabled: enable it
+                    oneWinItem.connect('toggled', (item, state) => {
+                        if (state) {
+                            // Enable the extension
                             try {
                                 Gio.Subprocess.new(
                                     ['gnome-extensions', 'enable', 'obision-extension-one-win@obision.com'],
@@ -1314,6 +1360,16 @@ const DesktopGrid = GObject.registerClass(
                                 );
                             } catch (e) {
                                 log(`[Obision] Error enabling One Win extension: ${e}`);
+                            }
+                        } else {
+                            // Disable the extension
+                            try {
+                                Gio.Subprocess.new(
+                                    ['gnome-extensions', 'disable', 'obision-extension-one-win@obision.com'],
+                                    Gio.SubprocessFlags.NONE
+                                );
+                            } catch (e) {
+                                log(`[Obision] Error disabling One Win extension: ${e}`);
                             }
                         }
                     });
@@ -1331,20 +1387,40 @@ const DesktopGrid = GObject.registerClass(
                 log(`[Obision] Error checking One Win extension: ${e}\n${e.stack}`);
             }
 
+            this._desktopMenu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+            // Preferences item
+            const prefsItem = new PopupMenu.PopupMenuItem('Preferences...');
+            prefsItem.connect('activate', () => {
+                try {
+                    Gio.Subprocess.new(
+                        ['gnome-extensions', 'prefs', 'obision-extension-desk-grid@obision.com'],
+                        Gio.SubprocessFlags.NONE
+                    );
+                } catch (e) {
+                    log(`[Obision] Error opening prefs: ${e}`);
+                }
+            });
+            this._desktopMenu.addMenuItem(prefsItem)
+
             // Add menu to UI group (above windows)
             Main.uiGroup.add_child(this._desktopMenu.actor);
 
-            // Position menu
+            // Force layout calculation before opening
+            this._desktopMenu.actor.show();
+            this._desktopMenu.actor.get_allocation_box();
+
+            // Position menu before opening
             const monitor = Main.layoutManager.primaryMonitor;
             const margin = 5;
             const screenRight = monitor.x + monitor.width - margin;
             const screenBottom = monitor.y + monitor.height - margin;
 
-            // Open menu to get its size
-            this._desktopMenu.open();
-
-            const menuWidth = this._desktopMenu.actor.width;
-            const menuHeight = this._desktopMenu.actor.height;
+            // Get menu dimensions (use preferred size)
+            const [minWidth, natWidth] = this._desktopMenu.actor.get_preferred_width(-1);
+            const [minHeight, natHeight] = this._desktopMenu.actor.get_preferred_height(-1);
+            const menuWidth = natWidth;
+            const menuHeight = natHeight;
 
             let menuPosX = x;
             let menuPosY = y;
@@ -1359,7 +1435,11 @@ const DesktopGrid = GObject.registerClass(
                 menuPosY = y - menuHeight;
             }
 
+            // Set position before opening
             this._desktopMenu.actor.set_position(menuPosX, menuPosY);
+
+            // Now open the menu
+            this._desktopMenu.open();
 
             // Close menu when clicking outside
             this._menuCaptureId = global.stage.connect('captured-event', (actor, event) => {
@@ -1391,6 +1471,164 @@ const DesktopGrid = GObject.registerClass(
             if (this._menuAnchor) {
                 this._menuAnchor.destroy();
                 this._menuAnchor = null;
+            }
+        }
+
+        _showCreateDialog(title, message, placeholder, callback) {
+            // Close menu first
+            this._closeDesktopMenu();
+
+            // Create modal dialog
+            const dialog = new ModalDialog.ModalDialog({
+                styleClass: 'modal-dialog',
+                destroyOnClose: true,
+            });
+
+            // Dialog content
+            const contentBox = new St.BoxLayout({
+                vertical: true,
+                style: 'spacing: 12px; padding: 12px;',
+            });
+
+            const titleLabel = new St.Label({
+                text: title,
+                style_class: 'dialog-header',
+                style: 'font-weight: bold; font-size: 1.2em; margin-bottom: 8px;',
+            });
+            contentBox.add_child(titleLabel);
+
+            const messageLabel = new St.Label({
+                text: message,
+                style: 'color: rgba(255,255,255,0.7);',
+            });
+            contentBox.add_child(messageLabel);
+
+            // Text entry
+            const entry = new St.Entry({
+                style: 'margin-top: 8px; min-width: 300px;',
+                text: '',
+                hint_text: placeholder,
+                can_focus: true,
+            });
+            contentBox.add_child(entry);
+
+            dialog.contentLayout.add_child(contentBox);
+
+            // Add buttons
+            dialog.addButton({
+                label: 'Cancel',
+                action: () => {
+                    dialog.close();
+                },
+                key: Clutter.KEY_Escape,
+            });
+
+            const createButton = dialog.addButton({
+                label: 'Create',
+                action: () => {
+                    const name = entry.get_text().trim();
+                    if (name) {
+                        callback(name);
+                    }
+                    dialog.close();
+                },
+                default: true,
+            });
+
+            // Style Create button with accent color
+            const buttonColor = this._extension._getAccentColor('rgb');
+            createButton.set_style(`background-color: ${buttonColor}; color: white; font-weight: bold;`);
+
+            // Disable button by default (empty field)
+            createButton.reactive = false;
+            createButton.can_focus = false;
+            createButton.set_opacity(128);
+
+            // Enable/disable Create button based on text input
+            entry.clutter_text.connect('text-changed', () => {
+                const text = entry.get_text().trim();
+                const hasText = text.length > 0;
+                createButton.reactive = hasText;
+                createButton.can_focus = hasText;
+                createButton.set_opacity(hasText ? 255 : 128);
+            });
+
+            // Handle Enter key in text entry
+            entry.clutter_text.connect('activate', () => {
+                const name = entry.get_text().trim();
+                if (name) {
+                    callback(name);
+                    dialog.close();
+                }
+            });
+
+            dialog.open();
+
+            // Focus entry
+            global.stage.set_key_focus(entry);
+        }
+
+        _showAlertDialog(title, message) {
+            // Create alert dialog using MessageDialogContent
+            const dialog = new ModalDialog.ModalDialog({
+                styleClass: 'modal-dialog',
+                destroyOnClose: true,
+            });
+
+            // Use MessageDialogContent for proper dialog structure
+            const content = new Dialog.MessageDialogContent({ title, description: message });
+            dialog.contentLayout.add_child(content);
+
+            // Add OK button
+            dialog.addButton({
+                label: 'OK',
+                action: () => {
+                    dialog.close();
+                },
+                default: true,
+                key: Clutter.KEY_Return,
+            });
+
+            dialog.open();
+        }
+
+        _showNewFolderDialog() {
+            this._showCreateDialog(
+                'Create Folder',
+                'Enter folder name:',
+                'New Folder',
+                (folderName) => this._createFolder(folderName)
+            );
+        }
+
+        _createFolder(folderName) {
+            try {
+                const desktopPath = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DESKTOP);
+                const folderPath = GLib.build_filenamev([desktopPath, folderName]);
+                const folder = Gio.File.new_for_path(folderPath);
+
+                // Check if folder already exists
+                if (folder.query_exists(null)) {
+                    log(`[Obision] Folder already exists: ${folderName}`);
+                    this._showAlertDialog('Folder Exists', `A folder named "${folderName}" already exists.`);
+                    return;
+                }
+
+                // Mark that we're creating a folder to avoid full reload
+                this._extension._creatingFolder = true;
+
+                // Create the folder
+                folder.make_directory(null);
+                log(`[Obision] Created folder: ${folderName}`);
+
+                // Clear flag after a short delay
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                    this._extension._creatingFolder = false;
+                    return GLib.SOURCE_REMOVE;
+                });
+            } catch (e) {
+                log(`[Obision] Error creating folder: ${e}`);
+                this._extension._creatingFolder = false;
             }
         }
 
@@ -1537,6 +1775,20 @@ export default class ObisionExtensionDesk extends Extension {
         // Try to connect to obision-dash settings for immediate updates
         this._setupObisionDashIntegration();
 
+        // Add keyboard shortcut for Create Folder (Shift+Ctrl+N)
+        Main.wm.addKeybinding(
+            'obision-desk-new-folder',
+            this._settings,
+            Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL,
+            () => {
+                // Show create folder dialog
+                if (this._grid) {
+                    this._grid._showNewFolderDialog();
+                }
+            }
+        );
+
         log('Obision Desk enabled');
     }
 
@@ -1570,6 +1822,9 @@ export default class ObisionExtensionDesk extends Extension {
 
         // Cleanup obision-dash integration
         this._cleanupObisionDashIntegration();
+
+        // Remove keyboard shortcut
+        Main.wm.removeKeybinding('obision-desk-new-folder');
 
         // Cleanup work area debounce timeout
         if (this._workAreaDebounceId) {
@@ -1936,37 +2191,61 @@ export default class ObisionExtensionDesk extends Extension {
         return this._getBaseIconSize();
     }
 
-    _getAccentColor() {
-        // Get system accent color from GNOME settings
+    /**
+     * Get GNOME accent color RGB values
+     * @returns {Object} RGB values for each accent color name
+     */
+    _getAccentColorMap() {
+        return {
+            'blue': { r: 53, g: 132, b: 228 },
+            'teal': { r: 53, g: 185, b: 171 },
+            'green': { r: 87, g: 227, b: 137 },
+            'yellow': { r: 246, g: 211, b: 45 },
+            'orange': { r: 255, g: 163, b: 72 },
+            'red': { r: 237, g: 51, b: 59 },
+            'pink': { r: 245, g: 121, b: 179 },
+            'purple': { r: 192, g: 97, b: 203 },
+            'slate': { r: 119, g: 127, b: 151 },
+        };
+    }
+
+    /**
+     * Get system accent color in specified format
+     * @param {string} format - 'rgb', 'rgba', or 'object' (default: 'rgba')
+     * @param {number} alpha - Alpha value for rgba format (default: 0.45)
+     * @returns {string|Object} Color in requested format
+     */
+    _getAccentColor(format = 'rgba', alpha = 0.45) {
         try {
             const schemaSource = Gio.SettingsSchemaSource.get_default();
             const schema = schemaSource.lookup('org.gnome.desktop.interface', true);
 
             if (schema) {
                 const interfaceSettings = new Gio.Settings({ settings_schema: schema });
-                const accentColor = interfaceSettings.get_string('accent-color');
+                const accentColorName = interfaceSettings.get_string('accent-color');
+                const colorMap = this._getAccentColorMap();
+                const color = colorMap[accentColorName] || colorMap['blue'];
 
-                // Map GNOME accent color names to rgba values with transparency
-                const accentColors = {
-                    'blue': 'rgba(53, 132, 228, 0.45)',
-                    'teal': 'rgba(0, 150, 136, 0.45)',
-                    'green': 'rgba(46, 194, 126, 0.45)',
-                    'yellow': 'rgba(245, 194, 17, 0.45)',
-                    'orange': 'rgba(255, 120, 0, 0.45)',
-                    'red': 'rgba(237, 51, 59, 0.45)',
-                    'pink': 'rgba(214, 51, 132, 0.45)',
-                    'purple': 'rgba(145, 65, 172, 0.45)',
-                    'slate': 'rgba(111, 131, 150, 0.45)',
-                };
-
-                return accentColors[accentColor] || accentColors['blue'];
+                if (format === 'rgb') {
+                    return `rgb(${color.r}, ${color.g}, ${color.b})`;
+                } else if (format === 'rgba') {
+                    return `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
+                } else if (format === 'object') {
+                    return color;
+                }
             }
         } catch (e) {
-            // Fallback to blue if settings not available
             log(`[Obision] Could not get accent color: ${e.message}`);
         }
 
-        return 'rgba(53, 132, 228, 0.45)';
+        // Fallback to blue
+        const defaultColor = { r: 53, g: 132, b: 228 };
+        if (format === 'rgb') {
+            return `rgb(${defaultColor.r}, ${defaultColor.g}, ${defaultColor.b})`;
+        } else if (format === 'object') {
+            return defaultColor;
+        }
+        return `rgba(${defaultColor.r}, ${defaultColor.g}, ${defaultColor.b}, ${alpha})`;
     }
 
     // ===== Public Notification API =====
@@ -2615,6 +2894,15 @@ export default class ObisionExtensionDesk extends Extension {
             );
 
             this._fileMonitor.connect('changed', (monitor, file, otherFile, eventType) => {
+                // Log the event for debugging
+                const eventNames = {
+                    [Gio.FileMonitorEvent.CREATED]: 'CREATED',
+                    [Gio.FileMonitorEvent.DELETED]: 'DELETED',
+                    [Gio.FileMonitorEvent.MOVED_IN]: 'MOVED_IN',
+                    [Gio.FileMonitorEvent.MOVED_OUT]: 'MOVED_OUT',
+                };
+                log(`[Obision] FileMonitor event: ${eventNames[eventType] || eventType} for ${file.get_basename()}`);
+
                 // Reload icons when directory changes
                 if (
                     eventType === Gio.FileMonitorEvent.CREATED ||
@@ -2622,7 +2910,99 @@ export default class ObisionExtensionDesk extends Extension {
                     eventType === Gio.FileMonitorEvent.MOVED_IN ||
                     eventType === Gio.FileMonitorEvent.MOVED_OUT
                 ) {
-                    // Debounce reloads
+                    // If we're creating a folder and this is a CREATED event, handle it specially
+                    if (this._creatingFolder && eventType === Gio.FileMonitorEvent.CREATED) {
+                        // Just add the new icon without clearing everything
+                        if (this._reloadTimeout) {
+                            GLib.source_remove(this._reloadTimeout);
+                        }
+                        this._reloadTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                            try {
+                                // Query with content type attribute to ensure proper icon association
+                                const fileInfo = file.query_info(
+                                    'standard::*,standard::content-type',
+                                    Gio.FileQueryInfoFlags.NONE,
+                                    null
+                                );
+                                const fileName = fileInfo.get_name();
+
+                                // Check if icon already exists
+                                const existingIcons = this._grid.getIcons();
+                                const exists = existingIcons.some(icon => icon.getFileName() === fileName);
+
+                                if (!exists) {
+                                    const icon = new DesktopIcon(fileInfo, this, fileName);
+                                    const iconCellSize = this._getIconCellSize(fileName);
+                                    const freeCell = this.findFreeCell(iconCellSize);
+
+                                    if (freeCell) {
+                                        const cellWidth = this._getCellWidth();
+                                        const cellHeight = this._getCellHeight();
+                                        const x = freeCell.col * cellWidth;
+                                        const y = freeCell.row * cellHeight;
+
+                                        this._grid.addIcon(icon, x, y);
+                                        this.placeIconInCell(icon, freeCell.col, freeCell.row);
+                                        // Save position for newly created file/folder
+                                        this._saveIconPosition(fileName, freeCell.col, freeCell.row);
+                                        log(`[Obision] Added new icon ${fileName} at (${freeCell.col}, ${freeCell.row}) and saved position`);
+                                    }
+                                }
+                            } catch (e) {
+                                log(`[Obision] Error adding new icon: ${e}`);
+                            }
+                            this._reloadTimeout = null;
+                            return GLib.SOURCE_REMOVE;
+                        });
+                        return;
+                    }
+
+                    // If this is a DELETED or MOVED_OUT event, just remove the specific icon without reloading
+                    if (eventType === Gio.FileMonitorEvent.DELETED || eventType === Gio.FileMonitorEvent.MOVED_OUT) {
+                        if (this._reloadTimeout) {
+                            GLib.source_remove(this._reloadTimeout);
+                        }
+                        this._reloadTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                            try {
+                                const fileName = file.get_basename();
+                                log(`[Obision] File removed/moved out: ${fileName}`);
+                                const existingIcons = this._grid.getIcons();
+                                const iconToRemove = existingIcons.find(icon => icon.getFileName() === fileName);
+
+                                if (iconToRemove) {
+                                    log(`[Obision] Found icon to remove: ${fileName}`);
+                                    // Free the cells occupied by this icon
+                                    const cellSize = iconToRemove._cellSize;
+                                    const [iconX, iconY] = iconToRemove.get_position();
+                                    const cellWidth = this._getCellWidth();
+                                    const cellHeight = this._getCellHeight();
+                                    const col = Math.round(iconX / cellWidth);
+                                    const row = Math.round(iconY / cellHeight);
+
+                                    // Free cells
+                                    for (let c = col; c < col + cellSize.cols && c < this._cells.length; c++) {
+                                        for (let r = row; r < row + cellSize.rows && r < this._cells[c].length; r++) {
+                                            this._cells[c][r].occupied = false;
+                                            this._cells[c][r].icon = null;
+                                        }
+                                    }
+
+                                    // Remove the icon from grid
+                                    this._grid.removeIcon(iconToRemove);
+                                    log(`[Obision] Removed icon ${fileName} without moving others`);
+                                } else {
+                                    log(`[Obision] Icon not found in grid: ${fileName}`);
+                                }
+                            } catch (e) {
+                                log(`[Obision] Error removing icon: ${e}`);
+                            }
+                            this._reloadTimeout = null;
+                            return GLib.SOURCE_REMOVE;
+                        });
+                        return;
+                    }
+
+                    // Normal reload for other cases
                     if (this._reloadTimeout) {
                         GLib.source_remove(this._reloadTimeout);
                     }

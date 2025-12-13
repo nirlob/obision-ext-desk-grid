@@ -4,7 +4,7 @@
 
 GNOME Shell extension for desktop icons with grid-based layout. Icons can span multiple cells (1x1 to 4x4) and have elevation/background styles for "widget mode". Built using GJS (GNOME JavaScript) for GNOME Shell 48+.
 
-**Key Differentiator**: Unlike DING (Desktop Icons NG), this extension runs entirely in the shell process using St.* widgets, not as a separate GTK subprocess.
+**Key Differentiator**: Unlike DING (Desktop Icons NG), this extension runs entirely in the shell process using `St.*` widgets, not as a separate GTK subprocess. This means simpler architecture but requires understanding GNOME Shell's internal APIs.
 
 ## Architecture
 
@@ -35,9 +35,10 @@ GNOME Shell extension for desktop icons with grid-based layout. Icons can span m
 
 ### Grid System Architecture
 
-**How icons know their size and position:**
+The grid uses a **cell reservation system** rather than fixed positioning:
+
 ```javascript
-// 1. Cell grid built at startup
+// 1. Cell grid built at startup from GSettings (grid-columns × grid-rows)
 _buildCellGrid() {
     this._cells = []; // 2D array: _cells[col][row]
     for (col in columns) {
@@ -49,24 +50,26 @@ _buildCellGrid() {
 
 // 2. Icon requests cell space when created
 const cellSize = extension._getIconCellSize(fileName); // e.g., {cols: 2, rows: 1}
-const position = extension.findFreeCell(cellSize); // Searches _cells array row-by-row, col-by-col
+const position = extension.findFreeCell(cellSize); // Searches _cells row-by-row, col-by-col
 
 // 3. Icon reserves cells (marks them as occupied)
 extension.placeIconInCell(iconInstance, col, row);
 
-// 4. Icon size calculated from cells
+// 4. Pixel dimensions calculated from reserved cells
 const cellWidth = extension._getCellWidth(); // workArea.width / gridColumns
 const iconPixelWidth = cellWidth * cellSize.cols;
 ```
 
-**Cell size mapping** (stored in GSettings `custom-icon-sizes` as JSON):
+**Cell size mapping** (stored in GSettings `custom-icon-sizes` as JSON string):
 ```javascript
 {
     "document.pdf": "2x2",    // 2 cells wide, 2 tall
     "Projects": "3x1",        // 3 cells wide, 1 tall
-    "image.png": "1x1"        // default
+    "image.png": "1x1"        // default (not stored)
 }
 ```
+
+**Critical**: Icons span multiple cells but are single widgets. When dragging, all cells must be freed and re-reserved atomically.
 
 ### Import Conventions
 
@@ -99,50 +102,67 @@ npm run deploy     # Build (compile schemas + pack) → install → show restart
 npm run update     # deploy + auto-reload (X11 only, uses scripts/reload.sh)
 npm run logs       # journalctl -f -o cat /usr/bin/gnome-shell
 
-# Schema changes require
+# Schema changes REQUIRE
 npm run compile-schemas   # glib-compile-schemas schemas/
-npm run deploy           # then restart shell
+npm run deploy            # then restart shell (schemas only load at startup)
 
-# Release process
-npm run release    # Automated: bump version → commit → tag → push (triggers GitHub Actions)
-npm run deb-build  # Build .deb package with dpkg-buildpackage
+# Release process (fully automated)
+npm run release    # scripts/release.sh: bump version → commit → tag → push (triggers CI)
+npm run deb-build  # Manual .deb build with dpkg-buildpackage
+
+# Code quality
+npm run lint       # ESLint check
+npm run format     # Prettier auto-format
 ```
 
 ### Testing Changes
 
 1. Edit `extension.js`, `prefs.js`, or `stylesheet.css`
-2. `npm run deploy` (if you changed GSettings schema, this recompiles it)
+2. Run `npm run deploy` (auto-compiles schemas if changed)
 3. Restart GNOME Shell:
    - **X11**: `Alt+F2` → type `r` → Enter (or use `npm run update` to auto-reload)
-   - **Wayland**: Log out/in (no hot reload available)
+   - **Wayland**: Log out and log back in (no hot reload available)
 4. Watch logs: `npm run logs` or `journalctl -f -o cat /usr/bin/gnome-shell`
-5. Use Looking Glass for debugging: `Alt+F2` → type `lg` → Enter (X11 only)
+5. Use Looking Glass for live debugging: `Alt+F2` → type `lg` → Enter (X11 only)
 
-**Debugging tip**: Use `log('message')` in extension code (NOT `console.log`). Output appears in journalctl.
+**Debugging tips**: 
+- Use `log('message')` in extension code (NOT `console.log`). Output appears in journalctl.
+- Looking Glass can inspect live objects: `Main.layoutManager`, `global.get_stage()`, etc.
+- Check for errors after deploy: Look for red errors in logs before restarting shell
 
 ## Critical Constraints
 
 ### Extension Lifecycle
 
-- `disable()` MUST clean up ALL resources:
-  - Disconnect ALL signal handlers
-  - Remove ALL added chrome/UI elements
-  - Clear ALL timeouts/intervals
-  - Null ALL references
+**`disable()` MUST clean up ALL resources** - this is non-negotiable:
+- Disconnect ALL signal handlers (including GSettings, FileMonitor)
+- Remove ALL added chrome/UI elements from `Main.layoutManager`
+- Clear ALL timeouts/intervals
+- Destroy ALL actors/widgets
+- Null ALL references to prevent memory leaks
 
 ```javascript
 disable() {
+    // Disconnect signals
     if (this._signalId) {
         someObject.disconnect(this._signalId);
         this._signalId = null;
     }
+    // Remove UI
     if (this._widget) {
         Main.layoutManager.removeChrome(this._widget);
         this._widget.destroy();
         this._widget = null;
     }
+    // Cancel file monitor
+    if (this._fileMonitor) {
+        this._fileMonitor.cancel();
+        this._fileMonitor = null;
+    }
 }
 ```
+
+**Failure to clean up properly causes crashes when toggling extension on/off.**
 
 ### GSettings
 
@@ -179,7 +199,7 @@ const ICON_CELL_SIZES = {
 ```
 
 **Widget mode** (elevation + backgrounds):
-- Icons can have `elevation` (0-3) for shadow depth - applied via `icon-shadow` property in JavaScript
+- Icons can have `elevation` (0-3) for shadow depth - applied via `icon-shadow` property in JavaScript (not CSS classes)
 - Backgrounds: `none`, `light` (frosted glass), `dark`, `accent` (uses GNOME accent color)
 - Stored separately in GSettings: `icon-elevations`, `icon-backgrounds`
 - Background styles applied via CSS classes in `stylesheet.css`: `bg-none`, `bg-light`, `bg-dark`, `bg-accent`
@@ -194,7 +214,14 @@ const ICON_CELL_SIZES = {
 ├── schemas/              # GSettings XML schema
 │   └── *.gschema.xml
 ├── package.json          # npm scripts for build/deploy
-└── reload.sh             # Shell restart helper
+├── scripts/
+│   ├── reload.sh         # Shell restart helper (X11 only)
+│   └── release.sh        # Automated release process
+└── debian/               # Debian packaging files
+    ├── changelog
+    ├── control
+    ├── copyright
+    └── rules
 ```
 
 ## Common Tasks

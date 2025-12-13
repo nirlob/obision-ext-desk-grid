@@ -9,7 +9,7 @@
 
 /* Desktop Icon Container (base for both types) */
 .desktop-icon {
-    padding: 8px;
+    padding: 0px;
     transition-duration: 150ms;
 }
 
@@ -40,7 +40,7 @@
 /* Widgets have visual distinction from regular icons */
 
 .desktop-icon.widget-mode {
-    padding: 10px;
+    padding: 0px;
 }
 
 
@@ -407,4 +407,15 @@
     font-size: 14px;
     min-width: 24px;
     min-height: 24px;
+}
+
+/* ===== Dialog Styles ===== */
+
+/* Dialog header - centered title like window title bar */
+.dialog-header {
+    text-align: center;
+    font-weight: bold;
+    font-size: 1.2em;
+    padding: 8px 0px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
