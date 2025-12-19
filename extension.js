@@ -1924,7 +1924,7 @@ export default class ObisionExtDeskGrid extends Extension {
      * Listen to its settings for immediate grid updates when dash changes
      */
     _setupObisionDashIntegration() {
-        const DASH_SCHEMA = 'com.obision.extensions.dash';
+        const DASH_SCHEMA = 'com.obision.ext.dash';
 
         try {
             // Try to get obision-dash settings
