@@ -1,6 +1,6 @@
 {
     "name": "obision-ext-desk-grid",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "A GNOME Shell extension for desktop icons with multi-size grid support",
     "main": "extension.js",
     "scripts": {
